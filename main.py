@@ -9,6 +9,7 @@ from email.utils import formataddr
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 import requests
+import re
 
 # Load environment variables from a local .env file (dev/previews)
 load_dotenv()
@@ -54,6 +55,8 @@ def resolve_smtp_config():
         gmail_user = os.getenv("GMAIL_USER") or os.getenv("GOOGLE_GMAIL_USER")
         gmail_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("GOOGLE_GMAIL_APP_PASSWORD")
         if gmail_user and gmail_pass:
+            # Normalize Gmail app password (Google shows it with spaces)
+            gmail_pass = re.sub(r"\s+", "", gmail_pass)
             smtp_host = "smtp.gmail.com"
             smtp_port = 587
             smtp_user = gmail_user

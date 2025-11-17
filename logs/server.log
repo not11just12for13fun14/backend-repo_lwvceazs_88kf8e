@@ -1,15 +1,13 @@
 INFO:     Will watch for changes in these directories: ['/home/workspace']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [994] using StatReload
-INFO:     Started server process [996]
+INFO:     Started reloader process [1063] using StatReload
+INFO:     Started server process [1065]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-INFO:     172.20.0.1:53692 - "GET /test HTTP/1.1" 200 OK
-INFO:     172.20.0.1:53704 - "GET /test HTTP/1.1" 200 OK
-INFO:     172.20.0.1:53692 - "GET /test HTTP/1.1" 200 OK
-INFO:     172.20.0.1:53704 - "GET /test HTTP/1.1" 200 OK
-INFO:     172.20.0.1:53718 - "HEAD / HTTP/1.1" 404 Not Found
-INFO:     172.20.0.1:60976 - "GET /test HTTP/1.1" 200 OK
-INFO:     172.20.0.1:60976 - "GET /test HTTP/1.1" 200 OK
-INFO:     172.20.0.1:33264 - "POST /contact/email HTTP/1.1" 200 OK
-INFO:     172.20.0.1:33272 - "POST /contact/email HTTP/1.1" 200 OK
+INFO:     172.20.0.1:39014 - "GET /test HTTP/1.1" 200 OK
+INFO:     172.20.0.1:39024 - "GET /test HTTP/1.1" 200 OK
+INFO:     172.20.0.1:39014 - "GET /test HTTP/1.1" 200 OK
+INFO:     172.20.0.1:39024 - "GET /test HTTP/1.1" 200 OK
+INFO:     172.20.0.1:39036 - "HEAD / HTTP/1.1" 404 Not Found
+INFO:     172.20.0.1:44940 - "GET /test HTTP/1.1" 200 OK
+INFO:     172.20.0.1:44940 - "GET /test HTTP/1.1" 200 OK
