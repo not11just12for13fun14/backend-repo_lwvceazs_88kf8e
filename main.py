@@ -1,39 +1,37 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional
 import os
 import smtplib
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+import requests
 
 # Load environment variables from a local .env file (dev/previews)
-# In production (Netlify/hosted), the platform env will be used instead.
 load_dotenv()
 
 app = FastAPI(title="Blovi API")
 
-# CORS: prefer explicit production domains but allow all in dev/previews
-allowed_origins: List[str] = [
-    os.getenv("FRONTEND_URL") or "",
-    "https://blovi.ai",
-    "https://www.blovi.ai",
-]
-# Always include wildcard for previews/dev unless explicitly disabled
-if os.getenv("ALLOW_ALL_CORS", "1") == "1":
-    allowed_origins.append("*")
-
+# CORS: be permissive to avoid frontend preview issues
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o for o in allowed_origins if o],
+    allow_origins=["*"],
+    allow_origin_regex=".*",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-TARGET_EMAIL = "juliustuokila649@gmail.com"
+# Target email can be configured via env
+TARGET_EMAIL = (
+    os.getenv("CONTACT_TARGET_EMAIL")
+    or os.getenv("RECEIVER_EMAIL")
+    or os.getenv("TARGET_EMAIL")
+    or "founders@blovi.ai"
+)
 
 class ContactEmailRequest(BaseModel):
     name: Optional[str] = None
@@ -76,10 +74,12 @@ def resolve_smtp_config():
     }
 
 
-def send_email(subject: str, html_body: str) -> None:
+def send_via_smtp(subject: str, html_body: str) -> None:
     cfg = resolve_smtp_config()
     if not cfg:
-        raise RuntimeError("Email service not configured: set SMTP_HOST, SMTP_USER, SMTP_PASS (or GMAIL_USER + GMAIL_APP_PASSWORD)")
+        raise RuntimeError(
+            "Email service not configured: set SMTP_HOST, SMTP_USER, SMTP_PASS (or GMAIL_USER + GMAIL_APP_PASSWORD)"
+        )
 
     msg = MIMEText(html_body, "html")
     msg["Subject"] = subject
@@ -92,9 +92,37 @@ def send_email(subject: str, html_body: str) -> None:
         server.sendmail(cfg["from_email"], [TARGET_EMAIL], msg.as_string())
 
 
+def send_via_mailgun(subject: str, html_body: str) -> bool:
+    api_key = os.getenv("MAILGUN_API_KEY")
+    domain = os.getenv("MAILGUN_DOMAIN")
+    from_name = os.getenv("FROM_NAME", "Blovi Site")
+    from_email = os.getenv("FROM_EMAIL") or f"no-reply@{domain}" if domain else None
+
+    if not (api_key and domain and from_email):
+        return False
+
+    url = f"https://api.mailgun.net/v3/{domain}/messages"
+    data = {
+        "from": f"{from_name} <{from_email}>",
+        "to": [TARGET_EMAIL],
+        "subject": subject,
+        "html": html_body,
+    }
+    try:
+        r = requests.post(url, auth=("api", api_key), data=data, timeout=20)
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
 @app.get("/test")
 async def test():
-    return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}
+    return {
+        "ok": True,
+        "time": datetime.now(timezone.utc).isoformat(),
+        "target_email": TARGET_EMAIL,
+    }
 
 
 @app.post("/contact/email")
@@ -103,11 +131,16 @@ async def contact_email(payload: ContactEmailRequest):
     subject = "New Blovi contact request"
 
     details = []
-    if payload.name: details.append(f"<b>Name:</b> {payload.name}")
-    if payload.company: details.append(f"<b>Company:</b> {payload.company}")
-    if payload.email: details.append(f"<b>Email:</b> {payload.email}")
-    if payload.phone: details.append(f"<b>Phone:</b> {payload.phone}")
-    if payload.source: details.append(f"<b>Source:</b> {payload.source}")
+    if payload.name:
+        details.append(f"<b>Name:</b> {payload.name}")
+    if payload.company:
+        details.append(f"<b>Company:</b> {payload.company}")
+    if payload.email:
+        details.append(f"<b>Email:</b> {payload.email}")
+    if payload.phone:
+        details.append(f"<b>Phone:</b> {payload.phone}")
+    if payload.source:
+        details.append(f"<b>Source:</b> {payload.source}")
 
     message_html = payload.message or ""
 
@@ -120,8 +153,13 @@ async def contact_email(payload: ContactEmailRequest):
     </div>
     """
 
+    # Try SMTP first, then Mailgun as fallback if configured
     try:
-      send_email(subject, html_body)
-      return {"ok": True}
-    except Exception as e:
-      raise HTTPException(status_code=500, detail=str(e))
+        send_via_smtp(subject, html_body)
+        return {"ok": True}
+    except Exception as smtp_err:
+        # Attempt Mailgun if available
+        if send_via_mailgun(subject, html_body):
+            return {"ok": True, "via": "mailgun"}
+        # As a last resort in dev, fail clearly
+        raise HTTPException(status_code=500, detail=f"Email send failed: {smtp_err}")
