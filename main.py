@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
 import os
 import smtplib
 from email.mime.text import MIMEText
@@ -10,13 +10,20 @@ from datetime import datetime, timezone
 
 app = FastAPI(title="Blovi API")
 
-# CORS: allow frontend origin if provided; otherwise allow all for dev
-frontend_url = os.getenv("FRONTEND_URL")
-origins = [frontend_url] if frontend_url else ["*"]
+# CORS: prefer explicit production domains but allow all in dev/previews
+allowed_origins: List[str] = [
+    os.getenv("FRONTEND_URL") or "",
+    "https://blovi.ai",
+    "https://www.blovi.ai",
+]
+# Always include wildcard for previews/dev unless explicitly disabled
+if os.getenv("ALLOW_ALL_CORS", "1") == "1":
+    allowed_origins.append("*")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=[o for o in allowed_origins if o],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -32,28 +39,52 @@ class ContactEmailRequest(BaseModel):
     source: Optional[str] = None  # where it came from (e.g., button or modal)
 
 
-def send_email(subject: str, html_body: str) -> None:
+def resolve_smtp_config():
+    # Primary: explicit SMTP_* envs
     smtp_host = os.getenv("SMTP_HOST")
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_user = os.getenv("SMTP_USER")
     smtp_pass = os.getenv("SMTP_PASS")
-    from_name = os.getenv("FROM_NAME", "Blovi Site")
-    from_email = os.getenv("FROM_EMAIL", smtp_user or "no-reply@blovi.ai")
 
-    if not smtp_host or not smtp_user or not smtp_pass:
-        # If SMTP not configured, we silently skip actual sending in this environment
-        # but do not error to keep UX smooth. In prod, set SMTP_* env vars.
-        return
+    # Fallback: Gmail specific envs
+    if not (smtp_host and smtp_user and smtp_pass):
+        gmail_user = os.getenv("GMAIL_USER") or os.getenv("GOOGLE_GMAIL_USER")
+        gmail_pass = os.getenv("GMAIL_APP_PASSWORD") or os.getenv("GOOGLE_GMAIL_APP_PASSWORD")
+        if gmail_user and gmail_pass:
+            smtp_host = "smtp.gmail.com"
+            smtp_port = 587
+            smtp_user = gmail_user
+            smtp_pass = gmail_pass
+
+    if not (smtp_host and smtp_user and smtp_pass):
+        return None
+
+    from_name = os.getenv("FROM_NAME", "Blovi Site")
+    from_email = os.getenv("FROM_EMAIL", smtp_user if smtp_user else "no-reply@blovi.ai")
+    return {
+        "host": smtp_host,
+        "port": smtp_port,
+        "user": smtp_user,
+        "pass": smtp_pass,
+        "from_name": from_name,
+        "from_email": from_email,
+    }
+
+
+def send_email(subject: str, html_body: str) -> None:
+    cfg = resolve_smtp_config()
+    if not cfg:
+        raise RuntimeError("Email service not configured: set SMTP_HOST, SMTP_USER, SMTP_PASS (or GMAIL_USER + GMAIL_APP_PASSWORD)")
 
     msg = MIMEText(html_body, "html")
     msg["Subject"] = subject
-    msg["From"] = formataddr((from_name, from_email))
+    msg["From"] = formataddr((cfg["from_name"], cfg["from_email"]))
     msg["To"] = TARGET_EMAIL
 
-    with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+    with smtplib.SMTP(cfg["host"], cfg["port"], timeout=15) as server:
         server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(from_email, [TARGET_EMAIL], msg.as_string())
+        server.login(cfg["user"], cfg["pass"])
+        server.sendmail(cfg["from_email"], [TARGET_EMAIL], msg.as_string())
 
 
 @app.get("/test")
@@ -85,7 +116,7 @@ async def contact_email(payload: ContactEmailRequest):
     """
 
     try:
-        send_email(subject, html_body)
-        return {"ok": True}
+      send_email(subject, html_body)
+      return {"ok": True}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+      raise HTTPException(status_code=500, detail=str(e))
