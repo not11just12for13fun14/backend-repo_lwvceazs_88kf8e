@@ -7,6 +7,11 @@ import smtplib
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+# Load environment variables from a local .env file (dev/previews)
+# In production (Netlify/hosted), the platform env will be used instead.
+load_dotenv()
 
 app = FastAPI(title="Blovi API")
 
@@ -81,7 +86,7 @@ def send_email(subject: str, html_body: str) -> None:
     msg["From"] = formataddr((cfg["from_name"], cfg["from_email"]))
     msg["To"] = TARGET_EMAIL
 
-    with smtplib.SMTP(cfg["host"], cfg["port"], timeout=15) as server:
+    with smtplib.SMTP(cfg["host"], cfg["port"], timeout=20) as server:
         server.starttls()
         server.login(cfg["user"], cfg["pass"])
         server.sendmail(cfg["from_email"], [TARGET_EMAIL], msg.as_string())
