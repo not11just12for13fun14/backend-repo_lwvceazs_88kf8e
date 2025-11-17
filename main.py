@@ -1,71 +1,91 @@
-import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
+from typing import Optional
+import os
+import smtplib
+from email.mime.text import MIMEText
+from email.utils import formataddr
+from datetime import datetime, timezone
 
-app = FastAPI()
+app = FastAPI(title="Blovi API")
 
+# CORS: allow frontend origin if provided; otherwise allow all for dev
+frontend_url = os.getenv("FRONTEND_URL")
+origins = [frontend_url] if frontend_url else ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+TARGET_EMAIL = "juliustuokila649@gmail.com"
 
-@app.get("/api/hello")
-def hello():
-    return {"message": "Hello from the backend API!"}
+class ContactEmailRequest(BaseModel):
+    name: Optional[str] = None
+    company: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    message: Optional[str] = None
+    source: Optional[str] = None  # where it came from (e.g., button or modal)
+
+
+def send_email(subject: str, html_body: str) -> None:
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASS")
+    from_name = os.getenv("FROM_NAME", "Blovi Site")
+    from_email = os.getenv("FROM_EMAIL", smtp_user or "no-reply@blovi.ai")
+
+    if not smtp_host or not smtp_user or not smtp_pass:
+        # If SMTP not configured, we silently skip actual sending in this environment
+        # but do not error to keep UX smooth. In prod, set SMTP_* env vars.
+        return
+
+    msg = MIMEText(html_body, "html")
+    msg["Subject"] = subject
+    msg["From"] = formataddr((from_name, from_email))
+    msg["To"] = TARGET_EMAIL
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(from_email, [TARGET_EMAIL], msg.as_string())
+
 
 @app.get("/test")
-def test_database():
-    """Test endpoint to check if database is available and accessible"""
-    response = {
-        "backend": "✅ Running",
-        "database": "❌ Not Available",
-        "database_url": None,
-        "database_name": None,
-        "connection_status": "Not Connected",
-        "collections": []
-    }
-    
+async def test():
+    return {"ok": True, "time": datetime.now(timezone.utc).isoformat()}
+
+
+@app.post("/contact/email")
+async def contact_email(payload: ContactEmailRequest):
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S %Z")
+    subject = "New Blovi contact request"
+
+    details = []
+    if payload.name: details.append(f"<b>Name:</b> {payload.name}")
+    if payload.company: details.append(f"<b>Company:</b> {payload.company}")
+    if payload.email: details.append(f"<b>Email:</b> {payload.email}")
+    if payload.phone: details.append(f"<b>Phone:</b> {payload.phone}")
+    if payload.source: details.append(f"<b>Source:</b> {payload.source}")
+
+    message_html = payload.message or ""
+
+    html_body = f"""
+    <div style='font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;'>
+      <h2 style='margin:0 0 8px'>New contact from Blovi site</h2>
+      <p style='margin:0 0 12px;color:#334155'>Received at {ts}</p>
+      {'<p style="margin:0 0 12px">' + '<br/>'.join(details) + '</p>' if details else ''}
+      {'<div style="padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0"><b>Message</b><br/>' + message_html + '</div>' if message_html else ''}
+    </div>
+    """
+
     try:
-        # Try to import database module
-        from database import db
-        
-        if db is not None:
-            response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
-            response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
-            response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
-            try:
-                collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
-                response["database"] = "✅ Connected & Working"
-            except Exception as e:
-                response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
-        else:
-            response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
+        send_email(subject, html_body)
+        return {"ok": True}
     except Exception as e:
-        response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
-    response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
-    response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
-    return response
-
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+        raise HTTPException(status_code=500, detail=str(e))
